@@ -12,7 +12,6 @@ Usage:
   #{__FILE__} go
 Options:
   #{__FILE__} go --file=<pcap_file>
-  #{__FILE__} go --interface=<iface> --filter=<filter>
 DOCOPT
 
 module RTcpIp
@@ -41,7 +40,7 @@ def int2flags(int)
 end
 
 def create_db()
-  db = SQLite3::Database.new ":memory:"
+  db = SQLite3::Database.new "test-1498087906.db"
 
   db.execute "CREATE TABLE IF NOT EXISTS Packets(
     Id Text PRIMARY KEY,
@@ -53,8 +52,15 @@ def create_db()
     Dport INT,
     Seq INT,
     Ack INT,
-    Flags INT
+    Flags INT,
+    Direction Text,
+    Session Text
   )"
+
+  db.execute "CREATE TABLE IF NOT EXISTS Sessions(
+    Id Text PRIMARY KEY
+  )"
+
 
   db
 end
@@ -76,36 +82,43 @@ def create_packet_record(db, pcap_obj)
       #{packet.tcp_dst},
       #{packet.tcp_seq},
       #{packet.tcp_ack},
-      #{packet.tcp_flags.to_i}
+      #{packet.tcp_flags.to_i},
+      NULL,
+      NULL
     )"
   end
 end
 
-def follow_flow(db, dport = false, client_ip = false)
+def follow_flow(db)
   syn_packets_stm = db.prepare "SELECT * FROM Packets where Flags=2"
   syn_packets = syn_packets_stm.execute
 
-  syn_packets.each do |row|
-    packets = []
-    packets_to = get_packets(db, row['Src'], row['Sport'], row['Dst'], row['Dport'])
-    packets_from = get_packets(db, row['Dst'], row['Dport'], row['Src'], row['Sport'])
-
-    packets << packets_to
-    packets << packets_from
-
-    packets.flatten.sort_by { |packet| packet['Timestamp'] }
-
-    puts '===='
-    puts "flow:"
-    packets.each_with_index do |pkt, i|
-      puts pkt
-    end
-    puts '===='
-
+  syn_packets.each do |packet|
+    populate_tcp_session(db, packet['Src'], packet['Sport'], packet['Dst'], packet['Dport'])
   end
 end
 
-def get_packets(db, src, sport, dst, dport, seq = false)
+def populate_tcp_session(db, src, sport, dst, dport)
+  packets_to = get_packets_by_src_dst(db, src, sport, dst, dport)
+  packets_from = get_packets_by_src_dst(db, dst, dport, src, sport)
+
+  packets_to.sort_by! { |packet| packet['Timestamp'] }
+  packets_from.sort_by! { |packet| packet['Timestamp'] }
+
+  flow_id = SecureRandom.uuid
+
+  db.execute "INSERT INTO Sessions VALUES('#{flow_id}')"
+
+  packets_to.each do |packet|
+    db.execute "UPDATE Packets SET Direction='to', Session='#{flow_id}' where Id='#{packet['Id']}'"
+  end
+
+  packets_from.each do |packet|
+    db.execute "UPDATE Packets SET Direction='from', Session='#{flow_id}' where Id='#{packet['Id']}'"
+  end
+end
+
+def get_packets_by_src_dst(db, src, sport, dst, dport, seq = false)
   packets_stm = db.prepare "SELECT * FROM Packets where Src=#{src} and Sport=#{sport} and Dst=#{dst} and Dport=#{dport}"
   packets = packets_stm.execute
   packets.to_a
@@ -113,7 +126,7 @@ end
 
 def process_pcap(db, pcap)
   pcap.loop() do |this,pkt|
-    create_packet_record(db, pkt)
+    #create_packet_record(db, pkt)
   end
 end
 
@@ -126,8 +139,17 @@ def main
 
     db = create_db()
     db.results_as_hash = true
-    process_pcap(db, pcap)
-    follow_flow(db)
+    #process_pcap(db, pcap)
+    #follow_flow(db)
+    sessions_stm = db.prepare "SELECT * FROM Sessions where Id='ef4c9bb9-078d-453f-90c0-049f6d2135f5'"
+    sessions = sessions_stm.execute
+
+    sessions.each do |session|
+      packets_stm = db.prepare "SELECT * FROM Packets where Session='#{session['Id']}'"
+      packets = packets_stm.execute
+
+      puts packets.to_a
+    end
 
   rescue Docopt::Exit => e
     puts e.message
