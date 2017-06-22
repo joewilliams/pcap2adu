@@ -71,6 +71,14 @@ module Pcap2adu
         when 2 # syn
           start_timestamp = packet['Timestamp']
           puts "SYN: #{'%.6f' % packet['Timestamp']} #{Pcap2adu::Utils.int2ip(packet['Src'])}:#{packet['Sport']} > #{Pcap2adu::Utils.int2ip(packet['Dst'])}:#{packet['Dport']}"
+        when 16 # ack
+          case packet['Direction']
+          when 'to'
+            syn_ack = packets.select{ |pkt| pkt['Flags'] == 18 }.first
+            if syn_ack['Seq']  + 1 == packet['Ack']
+              puts "SEQ: #{'%.6f' % packet['Timestamp']} #{Pcap2adu::Utils.int2ip(packet['Src'])}:#{packet['Sport']} > #{Pcap2adu::Utils.int2ip(packet['Dst'])}:#{packet['Dport']}"
+            end
+          end
         when 17 # fin
           case packet['Direction']
           when 'to'
