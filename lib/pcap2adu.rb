@@ -100,6 +100,13 @@ module Pcap2adu
               elapsed_time = '%.10f' % ( pkt['Timestamp'] - start_timestamp )
               puts "ADU: #{'%.6f' % pkt['Timestamp']} #{Pcap2adu::Utils.int2ip(pkt['Dst'])}:#{pkt['Dport']} < #{Pcap2adu::Utils.int2ip(pkt['Src'])}:#{pkt['Sport']} (elapsed_time: #{elapsed_time}, size: #{pkt['Size']}, rtt: #{rtt})"
             end
+          when 'from'
+            acks = packets.select{ |pkt| pkt['Ack'] == packet['Seq'] + packet['Size']}
+            acks.each do |pkt|
+              rtt = '%.10f' % (pkt['Timestamp'] - packet['Timestamp'] )
+              elapsed_time = '%.10f' % ( pkt['Timestamp'] - start_timestamp )
+              puts "ADU: #{'%.6f' % pkt['Timestamp']} #{Pcap2adu::Utils.int2ip(pkt['Src'])}:#{pkt['Sport']} > #{Pcap2adu::Utils.int2ip(pkt['Dst'])}:#{pkt['Dport']} (elapsed_time: #{elapsed_time}, size: #{pkt['Size']}, rtt: #{rtt})"
+            end
           end
         end
       end
