@@ -40,7 +40,7 @@ def int2flags(int)
 end
 
 def create_db()
-  db = SQLite3::Database.new "test-1498087906.db"
+  db = SQLite3::Database.new ":memory:"
 
   db.execute "CREATE TABLE IF NOT EXISTS Packets(
     Id Text PRIMARY KEY,
@@ -89,7 +89,7 @@ def create_packet_record(db, pcap_obj)
   end
 end
 
-def follow_flow(db)
+def populate_tcp_sessions(db)
   syn_packets_stm = db.prepare "SELECT * FROM Packets where Flags=2"
   syn_packets = syn_packets_stm.execute
 
@@ -126,8 +126,43 @@ end
 
 def process_pcap(db, pcap)
   pcap.loop() do |this,pkt|
-    #create_packet_record(db, pkt)
+    create_packet_record(db, pkt)
   end
+end
+
+def follow_session(packets)
+  start_timestamp = nil
+
+  packets.each_with_index do |packet, i|
+    case packet['Flags']
+    when 2 # syn
+      start_timestamp = packet['Timestamp']
+      puts "SYN: #{'%.6f' % packet['Timestamp']} #{int2ip(packet['Src'])}:#{packet['Sport']} > #{int2ip(packet['Dst'])}:#{packet['Dport']}"
+    when 17 # fin
+      case packet['Direction']
+      when 'to'
+        # we only really care when the client sent the FIN
+        rtt = '%.10f' % ( packet['Timestamp'] - packets[i - 1]['Timestamp'] )
+        elapsed_time = '%.10f' % ( packet['Timestamp'] - start_timestamp )
+        puts "FIN: #{'%.6f' % packet['Timestamp']} #{int2ip(packet['Src'])}:#{packet['Sport']} > #{int2ip(packet['Dst'])}:#{packet['Dport']} (elapsed_time: #{elapsed_time}, size: #{packet['Size']}, rtt: #{rtt})"
+      end
+    when 18 # syn, ack
+      rtt = '%.10f' % ( packet['Timestamp'] - packets[i - 1]['Timestamp'] )
+      elapsed_time = '%.10f' % ( packet['Timestamp'] - start_timestamp )
+      puts "RTT: #{'%.6f' % packet['Timestamp']} #{int2ip(packet['Dst'])}:#{packet['Dport']} > #{int2ip(packet['Src'])}:#{packet['Sport']} (elapsed_time: #{elapsed_time}, size: #{packet['Size']}, rtt: #{rtt})"
+    when 24 # psh, ack
+      case packet['Direction']
+      when 'to'
+        acks = packets.select{ |pkt| pkt['Ack'] == packet['Seq'] + packet['Size']}
+        acks.each do |pkt|
+          rtt = '%.10f' % (pkt['Timestamp'] - packet['Timestamp'] )
+          elapsed_time = '%.10f' % ( pkt['Timestamp'] - start_timestamp )
+          puts "ADU: #{'%.6f' % pkt['Timestamp']} #{int2ip(pkt['Dst'])}:#{pkt['Dport']} < #{int2ip(pkt['Src'])}:#{pkt['Sport']} (elapsed_time: #{elapsed_time}, size: #{pkt['Size']}, rtt: #{rtt})"
+        end
+      end
+    end
+  end
+
 end
 
 def main
@@ -139,16 +174,17 @@ def main
 
     db = create_db()
     db.results_as_hash = true
-    #process_pcap(db, pcap)
-    #follow_flow(db)
-    sessions_stm = db.prepare "SELECT * FROM Sessions where Id='ef4c9bb9-078d-453f-90c0-049f6d2135f5'"
+    process_pcap(db, pcap)
+    populate_tcp_sessions(db)
+    sessions_stm = db.prepare "SELECT * FROM Sessions"
     sessions = sessions_stm.execute
 
     sessions.each do |session|
+      puts "====== session: #{session['Id']} ======="
       packets_stm = db.prepare "SELECT * FROM Packets where Session='#{session['Id']}'"
       packets = packets_stm.execute
 
-      puts packets.to_a
+      follow_session(packets.to_a)
     end
 
   rescue Docopt::Exit => e
