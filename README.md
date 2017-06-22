@@ -38,3 +38,7 @@ FIN: 1497984392.095008 192.168.1.3:50408 > 216.58.193.206:443 (elapsed_time: 0.1
 * http://www.cs.rice.edu/~eugeneng/inm08/presentations/Terrell.pdf
 * http://www.cs.unc.edu/~jeffay/papers/SIGMETRICS-01.pdf
 * http://www.cs.unc.edu/~jeffay/talks/SIGMETRICS-01-slides.pdf
+
+#### Caveats
+
+This relies on pcap timestamps and their ordering so in some cases (retransmits, etc) it probably won't work right.
