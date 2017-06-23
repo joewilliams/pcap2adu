@@ -63,52 +63,93 @@ module Pcap2adu
       end
     end
 
+    def get_start_ts(packets)
+      packets.select{ |pkt| pkt['Flags'] == 2 && pkt['Ack'] == 0 }.first['Timestamp']
+    end
+
+    def syn(packet, packets)
+      puts "SYN: #{'%.6f' % packet['Timestamp']} #{Pcap2adu::Utils.int2ip(packet['Src'])}:#{packet['Sport']} > #{Pcap2adu::Utils.int2ip(packet['Dst'])}:#{packet['Dport']}"
+    end
+
+    def ack(packet, packets)
+      case packet['Direction']
+      when 'to'
+        syn_ack = packets.select{ |pkt| pkt['Flags'] == 18 && pkt['Seq'] == packet['Ack'] - 1 }.first
+        if syn_ack
+          puts "SEQ: #{'%.6f' % packet['Timestamp']} #{Pcap2adu::Utils.int2ip(packet['Src'])}:#{packet['Sport']} > #{Pcap2adu::Utils.int2ip(packet['Dst'])}:#{packet['Dport']}"
+        end
+      end
+    end
+
+    def syn_ack(packet, packets)
+      syn = packets.select{ |pkt| pkt['Flags'] == 2 && pkt['Seq'] == packet['Ack'] - 1 && pkt['Ack'] == 0 }.first
+      rtt = '%.10f' % ( packet['Timestamp'] - syn['Timestamp'] )
+      elapsed_time = '%.10f' % ( packet['Timestamp'] - get_start_ts(packets) )
+      puts "RTT: #{'%.6f' % packet['Timestamp']} #{Pcap2adu::Utils.int2ip(packet['Dst'])}:#{packet['Dport']} < #{Pcap2adu::Utils.int2ip(packet['Src'])}:#{packet['Sport']} (elapsed_time: #{elapsed_time}, rtt: #{rtt}, size: #{packet['Size']})"
+    end
+
+    def data_packets(packet, packets)
+      case packet['Direction']
+      when 'to'
+        ack = packets.select{ |pkt| pkt['Flags'] == 16 && pkt['Size'] == 0 && pkt['Ack'] == packet['Ack']}.first
+        rtt = '%.10f' % ( packet['Timestamp'] - ack['Timestamp'] )
+        elapsed_time = '%.10f' % ( packet['Timestamp'] - get_start_ts(packets) )
+        puts "ADU: #{'%.6f' % packet['Timestamp']} #{Pcap2adu::Utils.int2ip(packet['Src'])}:#{packet['Sport']} > #{Pcap2adu::Utils.int2ip(packet['Dst'])}:#{packet['Dport']} (elapsed_time: #{elapsed_time}, rtt: #{rtt}, size: #{packet['Size']})"
+      when 'from'
+        ack = packets.select{ |pkt| pkt['Ack'] == packet['Seq'] - @acc }.first
+        rtt = '%.10f' % ( packet['Timestamp'] - ack['Timestamp'] )
+        elapsed_time = '%.10f' % ( packet['Timestamp'] - get_start_ts(packets) )
+        puts "ADU: #{'%.6f' % packet['Timestamp']} #{Pcap2adu::Utils.int2ip(packet['Dst'])}:#{packet['Dport']} < #{Pcap2adu::Utils.int2ip(packet['Src'])}:#{packet['Sport']} (elapsed_time: #{elapsed_time}, rtt: #{rtt}, size: #{packet['Size']})"
+        @acc = packet['Size'] + @acc
+      end
+    end
+
+    def fin(packet, packets)
+      case packet['Direction']
+      when 'from'
+        elapsed_time = '%.10f' % ( packet['Timestamp'] - get_start_ts(packets) )
+        puts "END: #{'%.6f' % packet['Timestamp']} #{Pcap2adu::Utils.int2ip(packet['Src'])}:#{packet['Sport']} > #{Pcap2adu::Utils.int2ip(packet['Dst'])}:#{packet['Dport']} (elapsed_time: #{elapsed_time})"
+      end
+    end
+
+    def reset(packet, packets)
+      case packet['Direction']
+      when 'from'
+        elapsed_time = '%.10f' % ( packet['Timestamp'] - get_start_ts(packets) )
+        puts "END: #{'%.6f' % packet['Timestamp']} #{Pcap2adu::Utils.int2ip(packet['Src'])}:#{packet['Sport']} > #{Pcap2adu::Utils.int2ip(packet['Dst'])}:#{packet['Dport']} (elapsed_time: #{elapsed_time})"
+      end
+    end
+
     def follow_session(packets)
-      start_timestamp = nil
+      @acc = 0
 
       packets.each_with_index do |packet, i|
         case packet['Flags']
         when 2 # syn
-          start_timestamp = packet['Timestamp']
-          puts "SYN: #{'%.6f' % packet['Timestamp']} #{Pcap2adu::Utils.int2ip(packet['Src'])}:#{packet['Sport']} > #{Pcap2adu::Utils.int2ip(packet['Dst'])}:#{packet['Dport']}"
+          syn(packet, packets)
         when 16 # ack
-          case packet['Direction']
-          when 'to'
-            syn_ack = packets.select{ |pkt| pkt['Flags'] == 18 }.first
-            if syn_ack['Seq']  + 1 == packet['Ack']
-              puts "SEQ: #{'%.6f' % packet['Timestamp']} #{Pcap2adu::Utils.int2ip(packet['Src'])}:#{packet['Sport']} > #{Pcap2adu::Utils.int2ip(packet['Dst'])}:#{packet['Dport']}"
-            end
-          end
-        when 17 # fin
-          case packet['Direction']
-          when 'to'
-            # we only really care when the client sent the FIN
-            rtt = '%.10f' % ( packet['Timestamp'] - packets[i - 1]['Timestamp'] )
-            elapsed_time = '%.10f' % ( packet['Timestamp'] - start_timestamp )
-            puts "FIN: #{'%.6f' % packet['Timestamp']} #{Pcap2adu::Utils.int2ip(packet['Src'])}:#{packet['Sport']} > #{Pcap2adu::Utils.int2ip(packet['Dst'])}:#{packet['Dport']} (elapsed_time: #{elapsed_time}, rtt: #{rtt})"
+          if packet['Size'] > 0
+            data_packets(packet, packets)
+          else
+            ack(packet, packets)
           end
         when 18 # syn, ack
-          rtt = '%.10f' % ( packet['Timestamp'] - packets[i - 1]['Timestamp'] )
-          elapsed_time = '%.10f' % ( packet['Timestamp'] - start_timestamp )
-          puts "RTT: #{'%.6f' % packet['Timestamp']} #{Pcap2adu::Utils.int2ip(packet['Dst'])}:#{packet['Dport']} > #{Pcap2adu::Utils.int2ip(packet['Src'])}:#{packet['Sport']} (elapsed_time: #{elapsed_time}, rtt: #{rtt}, size: #{packet['Size']})"
-        when 24 # psh, ack
-          case packet['Direction']
-          when 'to'
-            acks = packets.select{ |pkt| pkt['Ack'] == packet['Seq'] + packet['Size']}
-            acks.each do |pkt|
-              rtt = '%.10f' % (pkt['Timestamp'] - packet['Timestamp'] )
-              elapsed_time = '%.10f' % ( pkt['Timestamp'] - start_timestamp )
-              puts "ADU: #{'%.6f' % pkt['Timestamp']} #{Pcap2adu::Utils.int2ip(pkt['Dst'])}:#{pkt['Dport']} < #{Pcap2adu::Utils.int2ip(pkt['Src'])}:#{pkt['Sport']} (elapsed_time: #{elapsed_time}, rtt: #{rtt}, size: #{pkt['Size']})"
-            end
-          when 'from'
-            acks = packets.select{ |pkt| pkt['Ack'] == packet['Seq'] + packet['Size']}
-            acks.each do |pkt|
-              rtt = '%.10f' % (pkt['Timestamp'] - packet['Timestamp'] )
-              elapsed_time = '%.10f' % ( pkt['Timestamp'] - start_timestamp )
-              puts "ADU: #{'%.6f' % pkt['Timestamp']} #{Pcap2adu::Utils.int2ip(pkt['Src'])}:#{pkt['Sport']} > #{Pcap2adu::Utils.int2ip(pkt['Dst'])}:#{pkt['Dport']} (elapsed_time: #{elapsed_time}, rtt: #{rtt}, size: #{packet['Size']})"
-            end
+          syn_ack(packet, packets)
+        when 17 # ack, fin
+          fin(packet, packets)
+        when 1 # fin
+          fin(packet, packets)
+        when 4 # reset
+          # avoid duplicate resets
+          if packet == packets.last
+            reset(packet, packets)
+          end
+        else
+          if packet['Size'] > 0
+            data_packets(packet, packets)
           end
         end
+
       end
 
     end
