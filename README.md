@@ -36,3 +36,7 @@ END: 1497984392.125286 216.58.193.206:443 > 192.168.1.3:50408 (elapsed_time: 0.1
 #### Caveats
 
 Probably doesn't work right in various types of packet loss and duplicate packets.
+
+#### License
+
+pcap2adu is open source software available under the MIT License
